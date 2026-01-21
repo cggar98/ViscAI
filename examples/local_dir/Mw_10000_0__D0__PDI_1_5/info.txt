@@ -1,0 +1,38 @@
+Found bob.rc 
+End of rc file 
+
+
+ parameters after reading inputs: 
+alpha  = 1.000000e+00 
+R_L  = 1.000000e-08 
+p^2  = 2.500000e-02 
+Mass of monomer  = 2.800000e+01 
+N_e  = 4.000000e+01 
+Temperature (input) = 4.631500e+02 
+G_0 = 1.925425e+06 
+tau_e = 3.000000e-07 sec 
+ 
+compound arm prefactor includes effective armlen.
+Reptation in thin tube.
+
+ End of input parameters 
+Selected H polymer
+Side arms : : monodisperse with M_w = 1.000000e+04
+Backbone : : monodisperse with M_w = 1.000000e+04
+Created 200 H  polymers 
+component  0 : Total mass = 8.928571e+03 
+maximum priority = 2 
+ maximum seniority = 2 
+Branching topology of the polymers
+Number of branches per molecule = 2.000000e+00 
+number of linear molecules = 0 
+mass fraction of linear molecules = 0.000000e+00 
+number of star molecules = 0 
+mass fraction of star molecules = 0.000000e+00 
+number of comb molecules = 200 
+mass fraction of comb molecules = 1.000000e+00 
+number of branch-on-branch molecules = 0 
+mass fraction of branch-on-branch molecules = 0.000000e+00 
+Following relaxation to calculate linear rheology
+zero-shear viscosity = 1.308419e+05 
+|complex-viscosity|(1.0e-6) = 1.308462e+05 

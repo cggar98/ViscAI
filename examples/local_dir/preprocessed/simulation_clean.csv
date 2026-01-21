@@ -1,0 +1,5 @@
+id,molecular_weight,pdi,distribution_label,zero_shear_viscosity,complex_viscosity
+1,10000.0,1.5,Gaussian,18429.33,0.01842933
+2,10000.0,2.5,Gaussian,3532.806,0.0035327669999999996
+3,20000.0,1.5,Gaussian,10657090.0,27.08736
+4,20000.0,2.5,Gaussian,370317.5,0.3771906

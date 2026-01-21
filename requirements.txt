@@ -1,0 +1,12 @@
+git>=2.34.1
+python>=3.10
+conda>=24.11.3
+streamlit>=1.39.0
+#DB Browser for SQLite >=3.12.1
+paramiko
+numpy
+pandas
+matplotlib
+pillow
+tk
+grace

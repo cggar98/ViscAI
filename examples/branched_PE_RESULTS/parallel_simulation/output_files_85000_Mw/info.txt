@@ -1,0 +1,61 @@
+Found bob.rc 
+OutMode = 0 
+PSquare = 2.500000e-02 
+Alpha = 1.000000e+00 
+TStart = 1.000000e-04 
+DtMult = 1.005000e+00 
+FreqMin = 3.000000e-03
+FreqMax = 3.000000e+02
+FreqInterval = 1.200000e+00
+Priority is defined only for entangled segments 
+StretchBinWidth = 1.250000e+00 
+NumNlinStretch = 20 
+NlinAvDt = 1.100000e+00 
+MaxwellInterval = 2.000000e+00 
+NlinAvInterval = 1.020000e+00 
+Turning on GPC module
+GPCNumBin = 100
+PrefMode = 1 
+ReptScheme = 1 
+RetLim = 0.000000e+00 
+ReptScheme = 1 
+End of rc file 
+
+
+ parameters after reading inputs: 
+alpha  = 1.000000e+00 
+R_L  = 1.000000e-08 
+p^2  = 2.500000e-02 
+Mass of monomer  = 2.800000e+01 
+N_e  = 4.000000e+01 
+Temperature (input) = 4.631500e+02 
+G_0 = 1.925425e+06 
+tau_e = 3.000000e-07 sec 
+ 
+compound arm prefactor includes effective armlen.
+Reptation in thin tube.
+
+ End of input parameters 
+Selected H polymer
+Side arms : from Lognormal distribution with M_w = 8.500000e+04 and PDI = 1.500000e+00
+Backbone : from Lognormal distribution with M_w = 8.500000e+04 and PDI = 1.200000e+00
+Created 200 H  polymers 
+component  0 : Total mass = 5.369506e+04 
+GPC module for component 0  : 
+Mw = 3.222961e+05 ,   Mn =  3.006923e+05, PDI = 1.071847e+00 
+maximum priority = 2 
+ maximum seniority = 2 
+Branching topology of the polymers
+Number of branches per molecule = 2.000000e+00 
+number of linear molecules = 0 
+mass fraction of linear molecules = 0.000000e+00 
+number of star molecules = 0 
+mass fraction of star molecules = 0.000000e+00 
+number of comb molecules = 200 
+mass fraction of comb molecules = 1.000000e+00 
+number of branch-on-branch molecules = 0 
+mass fraction of branch-on-branch molecules = 0.000000e+00 
+Following relaxation to calculate linear rheology
+Warning : viscosity estimate may not be reliable 
+zero-shear viscosity = 6.563816e+17 
+|complex-viscosity|(1.0e-6) = 6.126166e+11 
