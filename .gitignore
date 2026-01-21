@@ -1,0 +1,5 @@
+install.log
+build/**
+dist/**
+ViscAI.egg-info/**
+
