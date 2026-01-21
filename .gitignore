@@ -2,4 +2,4 @@ install.log
 build/**
 dist/**
 ViscAI.egg-info/**
-
+__pycache__/
