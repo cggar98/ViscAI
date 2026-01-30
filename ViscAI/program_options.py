@@ -5,6 +5,7 @@ import streamlit as st
 import os
 import stat
 import tempfile
+from pathlib import Path
 
 from ViscAI.slurm_adapter import SlurmAdapter
 from ViscAI.ViscAI_exec import build_viscai_command, execute_remote_process
@@ -20,6 +21,7 @@ from ViscAI.utils.pipeline.train_and_diagnostic_models import (train_baseline_mo
                                                                bootstrap_metric, compute_permutation_importance,
                                                                save_shap_summary)
 from ViscAI.utils.pipeline.worst_cases_analysis import save_worst_cases, plot_worst_cases, check_worst_cases_ranges, check_worst_cases_local_density, rf_uncertainty_for_worst_cases
+from ViscAI.utils.upload_slurms import _slurm_submit_multiple_mw
 
 import time
 
@@ -88,9 +90,7 @@ def viscai_paramgrid_run(
 
     ssh = connect_remote_server(name_server, name_user, ssh_key_options)
     sftp = ssh.open_sftp()
-    conda_sh = get_conda_sh_path(ssh) or "~/.bashrc"
 
-    use_slurm = bool(st.session_state.get("slurm_partition", "").strip())
     batch_flag = " -b" if st.session_state.get("batch_mode", False) else ""
     genpoly_flag = " -p" if st.session_state.get("generate_polymers", False) else ""
 
@@ -98,16 +98,9 @@ def viscai_paramgrid_run(
     dist_opts = dist_codes if (dist_codes and len(dist_codes) > 0) else [None]
     pdi_opts  = pdi_list  if (pdi_list  and len(pdi_list)  > 0) else [None]
 
-    # util: activar conda
-    def _activate_cmd() -> str:
-        return (
-    f"source '{conda_sh}'\n"
-    f"eval \"$(conda shell.bash hook)\"\n"
-    f"conda activate '{virtualenv_path}'")
-
-
-
-    #   TEST
+    # Bandera para crear/upload/submit full_send.sh y slurm submit solo UNA vez
+    full_send_created = False
+    slurm_created_results = None
 
     for mw in mw_list:
         for dist_code in dist_opts:
@@ -168,152 +161,262 @@ def viscai_paramgrid_run(
                     results.append((mw, dist_code, pdi_val, f"Error preparando bob.rc: {e}"))
                     continue
 
-                # TESTETSTEST
 
-                # Comando bob2p5
-                bob_cmd = f"bob2p5 -i {os.path.basename(remote_input)}"
-                if polymer_filename:
-                    bob_cmd += f" -c {polymer_filename}"
-                bob_cmd += batch_flag + genpoly_flag
+    # **************** NUEVO CAMBIO **********
+    # Track created subdirectories (para debug)
+    created_subdirs = []
+    # dentro del bucle donde defines `subdir` y creas mkdir -p:
+    # después de ssh.exec_command(f"mkdir -p '{subdir}'") añade:
+    # created_subdirs.append(subdir)
 
-                try:
-                    if use_slurm:
-                        # Parametría Slurm
-                        job_name = st.session_state.get("slurm_job_name", "BoBjob")
-                        partition = st.session_state.get("slurm_partition", "")
-                        nodes = int(st.session_state.get("slurm_nodes", 1))
-                        cpus = int(st.session_state.get("slurm_cpus_per_task", 1))
-                        mem = st.session_state.get("slurm_mem_per_cpu", "1G")
-                        activate_cmd = _activate_cmd()
-                        script = f"""#!/bin/bash -l
-#SBATCH --partition={partition}
-#SBATCH --nodes={nodes}
-#SBATCH --cpus-per-task={cpus}
-#SBATCH --mem-per-cpu={mem}
-#SBATCH --job-name={job_name}_MW{str(mw).replace('.', '_')}_D{dist_token}_PDI{pdi_token}
-#SBATCH --output={subdir}/slurm-%j.out
-#SBATCH --error={subdir}/slurm-%j.err
+    # Si no lo añadiste durante la creación, recabar ahora:
+    try:
+        remote_entries = sftp.listdir(working_directory)
+        created_subdirs = [os.path.join(working_directory, d) for d in remote_entries if d.startswith("Mw_")]
+        results.append(("CREATED_SUBDIRS_COUNT", len(created_subdirs)))
+        # opcional: mostrar los primeros N
+        results.append(("CREATED_SUBDIRS_SAMPLE", created_subdirs[:10]))
+    except Exception:
+        results.append(("CREATED_SUBDIRS_ERROR", "Could not list remote working_directory"))
+    # **************** NUEVO CAMBIO **********
 
-set -euxo pipefail
 
-echo "===== SLURM DEBUG START ====="
-echo "HOST: $(hostname)"
-echo "USER: $(whoami)"
-echo "SHELL: $SHELL"
-echo "PWD (before cd): $(pwd)"
-date
 
-echo "=== LS ROOT ==="
-ls -la
+    # ----------------- FUERA DEL BUCLE: crear/ subir / submit slurm scripts UNA VEZ -----------------
+    # ****************************NUEVO CAMBIO*************
+    try:
+        # Llamada única para crear/colocar todos los slurm.sh (opción B)
+        slurm_created_results = _slurm_submit_multiple_mw(
+            name_server=name_server,
+            name_user=name_user,
+            ssh_key_options=ssh_key_options,
+            working_dir=working_directory,
+            mw_list=mw_list,
+            input_file=input_file,
+            polymer_file=polymer_file,
+        )
+        if slurm_created_results:
+            for r in slurm_created_results:
+                results.append(("SLURM", str(r)))
+        results.append(("SLURM_SUBMIT", "DONE"))
+        st.success("SLURM scripts created/submitted (ver resumen).")
+    except Exception as e:
+        results.append(("SLURM", f"ERROR calling external slurm submit: {e}"))
+        st.warning(f"SLURM submit failed: {e}")
+    # ****************************NUEVO CAMBIO*************
 
-echo "=== CD to subdir ==="
-cd "{subdir}"
-pwd
-ls -la
+    # ----------------- Crear / subir / enviar full_send.sh UNA SOLA VEZ -----------------
+    # ****************************NUEVO CAMBIO*************
+    try:
+        #   test
+        # contenido del full_send.sh con corrección wc -l
 
-echo "=== CONDA INIT ==="
-source "{conda_sh}"
-eval "$(conda shell.bash hook)"
-conda activate "{virtualenv_path}"
+        # **************** NUEVO CAMBIO **********
+        full_send_content = """#!/bin/bash
+#SBATCH --partition=all
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH --mem-per-cpu=1024M
+#SBATCH --job-name=FULL_SEND
 
-echo "=== ENV CHECK ==="
-which python || true
-python --version || true
-which bob2p5 || true
-echo "PATH=$PATH"
+# Config
+WK="$(pwd)"
+MAXJOBSINSLURM=60    # configurable: ajustar según política del cluster
+SLEEP_WHEN_BUSY=60   # segundos a esperar cuando se alcanza el límite
 
-echo "=== INPUT FILES ==="
-ls -la *.dat || true
-ls -la
+# Use user's jobs only (safer) - cuenta solo los jobs del usuario que ejecuta el script
+# Si quieres otro usuario, asigna USERNAME aquí
+USERNAME="${USER}"
 
-echo "=== RUN bob2p5 ==="
-{bob_cmd}
+# Number of total jobs (number of Mw*/ dirs)
+DIRBOB=( $(ls -d Mw*/ 2>/dev/null) )
+TOTALJOBS=${#DIRBOB[@]}
 
-echo "===== SLURM DEBUG END ====="
-date
-"""
+if [[ ${TOTALJOBS} -eq 0 ]]; then
+    echo "No Mw_* directories found in ${WK}" >&2
+    exit 1
+fi
 
-                        local_sh = tempfile.NamedTemporaryFile(delete=False,
-                            suffix=f"_MW{str(mw).replace('.', '_')}_D{dist_token}_PDI{pdi_token}.sh")
-                        local_sh.write(script.encode("utf-8"))
-                        local_sh.close()
-                        remote_sh = f"{subdir}/run_MW{str(mw).replace('.', '_')}_D{dist_token}_PDI{pdi_token}.sh"
-                        sftp.put(local_sh.name, remote_sh)
-                        os.remove(local_sh.name)
+if [[ ! -e "${WK}/jobs.txt" ]]; then
+    : > "${WK}/jobs.txt"
+fi
 
-                        try:
-                            # instantiate adapter (create a small local DB filename; ajusta si lo quieres en otro lugar)
-                            dbname_local = os.path.join(os.getcwd(), "viscai_slurm_jobs.db")
-                            slurm = SlurmAdapter(name_server, dbname_local, name_user, ssh_key_options)
+index=0
+while [ ${index} -lt ${TOTALJOBS} ]; do
+    # Actualiza número de jobs del usuario
+    NJOBS=$(squeue -h -u "${USERNAME}" | wc -l)
 
-                            # upload (you may already have done sftp.put earlier; using adapter.upload is fine)
-                            slurm.upload(local_sh.name, remote_sh)
-                            # ensure executable
-                            slurm.chmod(remote_sh, 0o750)
+    current="${DIRBOB[$index]}"
+    if [[ ${NJOBS} -lt ${MAXJOBSINSLURM} ]]; then
+       echo "Submitting ${current} (NJOBS=${NJOBS}) at $(date)" >> "${WK}/full_send.log"
+       cd "${current}" || { echo "cd failed to ${current}" >> "${WK}/full_send.log"; break; }
+       sbatch slurm.sh 1>tmp_submit.txt 2>tmp_submit.err
+       rc=$?
+       jobid=$(awk '{print $NF}' tmp_submit.txt 2>/dev/null || true)
+       if [[ ${rc} -eq 0 && -n "${jobid}" ]]; then
+           echo "${jobid} ${current}" >> "${WK}/jobs.txt"
+           echo "OK submit ${jobid} for ${current}" >> "${WK}/full_send.log"
+       else
+           echo "SUBMIT-ERROR rc=${rc} out=$(cat tmp_submit.txt 2>/dev/null) err=$(cat tmp_submit.err 2>/dev/null)" >> "${WK}/full_send.log"
+       fi
+       rm -f tmp_submit.txt tmp_submit.err
+       index=$((index+1))
+       cd "${WK}"
+       echo "NEW $(date) --> JOBSEND: ${index}, TOTALJOBS: ${TOTALJOBS}, ${current}" >> "${WK}/full_send.log"
+    else
+       echo "$(date) WAIT: NJOBS=${NJOBS} >= MAXJOBSINSLURM=${MAXJOBSINSLURM}" >> "${WK}/full_send.log"
+       sleep ${SLEEP_WHEN_BUSY}
+    fi
+done
 
-                            # prepare job name and submit
-                            job_name_full = f"{job_name}_MW{str(mw).replace('.', '_')}_D{dist_token}_PDI{pdi_token}"
-                            out_sbatch, err_sbatch = slurm.submit_script(
-                                remotedir=subdir,
-                                script_name=os.path.basename(remote_sh),
-                                partition=partition,
-                                nodes=nodes,
-                                cpus_per_task=cpus,
-                                mem_per_cpu=mem,
-                                job_name=job_name_full
-                            )
-                            if err_sbatch:
-                                results.append((mw, dist_code, pdi_val, f"Slurm ERROR: {err_sbatch}"))
-                            else:
-                                results.append((mw, dist_code, pdi_val, f"Enqueued: {out_sbatch.strip()}"))
+echo "Jobs submission loop finished at $(date)" >> "${WK}/full_send.log"
+echo "Jobs Done!!!!!"
+    """
+# **************** NUEVO CAMBIO **********
 
-                            slurm.close()
-                        except Exception as e:
-                            results.append((mw, dist_code, pdi_val, f"Slurm Adapter ERROR: {e}"))
 
+
+
+
+        # Guardar localmente
+        local_dir = st.session_state.get("input_options", {}).get("input_file_002", "")
+        if local_dir and os.path.isdir(local_dir):
+            local_full_send = os.path.join(local_dir, "full_send.sh")
+        else:
+            local_full_send = os.path.join(tempfile.gettempdir(), "full_send.sh")
+
+        with open(local_full_send, "w") as f:
+            f.write(full_send_content)
+        try:
+            os.chmod(local_full_send, 0o750)
+        except Exception:
+            pass
+        results.append(("FULL_SEND_LOCAL", f"Created {local_full_send}"))
+
+        # Subir al remoto
+        remote_full_send = os.path.join(working_directory, "full_send.sh")
+        try:
+            sftp.put(local_full_send, remote_full_send)
+            try:
+                sftp.chmod(remote_full_send, 0o750)
+            except Exception:
+                pass
+            results.append(("FULL_SEND_REMOTE", f"Uploaded to {remote_full_send}"))
+            st.success(f"'full_send.sh' creado localmente y subido a: {remote_full_send}")
+        except Exception as e:
+            results.append(("FULL_SEND_UPLOAD_ERROR", str(e)))
+            st.warning(f"No se pudo subir full_send.sh al remoto: {e}")
+    except Exception as e:
+        results.append(("FULL_SEND_ERROR", str(e)))
+        st.warning(f"Error creando/subiendo full_send.sh: {e}")
+        # ****************************NUEVO CAMBIO*************
+
+    # ----------------- Enviar full_send.sh UNA VEZ -----------------
+    # ****************************NUEVO CAMBIO*************
+    try:
+        cmd = f"cd '{working_directory}' && sbatch full_send.sh"
+        stdin, stdout, stderr = ssh.exec_command(cmd)
+        exit_code = stdout.channel.recv_exit_status()
+        out_text = stdout.read().decode().strip()
+        err_text = stderr.read().decode().strip()
+
+        if exit_code == 0:
+            results.append(("FULL_SEND_SUBMIT_OK", out_text or err_text or "sbatch returned 0"))
+            st.success(f"'full_send.sh' enviado con sbatch: {out_text or err_text}")
+        else:
+            results.append(("FULL_SEND_SUBMIT_ERROR", f"rc={exit_code}, out={out_text}, err={err_text}"))
+            st.warning(f"sbatch fallo: rc={exit_code}, err={err_text}")
+    except Exception as e:
+        results.append(("FULL_SEND_SUBMIT_EXCEPTION", str(e)))
+        st.warning(f"Error ejecutando sbatch full_send.sh en remoto: {e}")
+    # ****************************NUEVO CAMBIO*************
+
+    # ********************** Esperar a que los jobs enviados por full_send.sh terminen ****************
+    # ****************************NUEVO CAMBIO*************
+    try:
+        remote_jobs_txt = os.path.join(working_directory, "jobs.txt")
+        # espera a que exista jobs.txt (timeout configurable)
+        wait_for_jobsfile_secs = int(st.session_state.get("fullsend_wait_jobsfile_secs", 600))  # default 10 min
+        poll_interval = float(st.session_state.get("fullsend_poll_interval_secs", 5.0))  # default 5 s
+        waited = 0.0
+        jobsfile_found = False
+        while waited < wait_for_jobsfile_secs:
+            try:
+                sftp.stat(remote_jobs_txt)
+                jobsfile_found = True
+                break
+            except Exception:
+                time.sleep(poll_interval)
+                waited += poll_interval
+
+        if not jobsfile_found:
+            results.append(
+                ("FULL_SEND_JOBSFILE_TIMEOUT", f"No se encontró {remote_jobs_txt} tras {wait_for_jobsfile_secs}s"))
+            st.warning(
+                f"No se encontró {remote_jobs_txt} en remoto tras {wait_for_jobsfile_secs}s; procediendo a descarga (puede faltar output generado por jobs).")
+        else:
+            # Leer job ids desde jobs.txt
+            jobids = []
+            try:
+                with sftp.open(remote_jobs_txt, "r") as jf:
+                    raw = jf.read().decode() if isinstance(jf.read(), bytes) else jf.read()
+                    # Note: above .read() was used twice to be robust; if your sftp.open returns text, adapt.
+                # (Mejor reabrir para leer correctamente)
+                with sftp.open(remote_jobs_txt, "r") as jf2:
+                    lines = jf2.readlines()
+                for ln in lines:
+                    toks = ln.strip().split()
+                    if len(toks) >= 1:
+                        jobids.append(toks[0])
+            except Exception as e:
+                # Si no pudimos leer jobs.txt, lo notificamos y seguiremos intentando vía squeue por patrón
+                results.append(("FULL_SEND_JOBS_READ_ERR", str(e)))
+                jobids = []
+
+            # Si tenemos jobids: poll hasta que ninguno esté en squeue
+            if jobids:
+                joblist = ",".join(jobids)
+                st.info(f"Esperando a que terminen {len(jobids)} jobs: {joblist}")
+                max_wait_for_jobs_secs = int(st.session_state.get("fullsend_wait_jobs_secs", 7200))  # default 2h
+                waited = 0.0
+                still_running = True
+                while waited < max_wait_for_jobs_secs and still_running:
+                    try:
+                        # Pregunta a squeue cuántos de esos jobids siguen en cola
+                        stdin2, stdout2, stderr2 = ssh.exec_command(f"squeue -h -j {joblist} | wc -l")
+                        cnt_text = stdout2.read().decode().strip()
+                        cnt = int(cnt_text) if cnt_text.isdigit() else 0
+                    except Exception:
+                        # En caso de error con squeue, asumimos que aún puede haber jobs; dormir y reintentar
+                        cnt = 1
+
+                    if cnt == 0:
+                        still_running = False
+                        break
                     else:
-                        # Ejecución directa
-                        activate_cmd = _activate_cmd()
-                        full_cmd = f"bash -lc \"cd '{subdir}' && {activate_cmd} && {bob_cmd}\""
+                        # esperar y volver a comprobar
+                        time.sleep(max(5.0, poll_interval))
+                        waited += max(5.0, poll_interval)
+                if still_running:
+                    results.append(("FULL_SEND_JOBS_TIMEOUT",
+                                    f"Algunos jobs siguen en cola tras {max_wait_for_jobs_secs}s; descargando lo disponible."))
+                    st.warning(
+                        f"Algunos jobs siguen en cola tras {max_wait_for_jobs_secs}s; procediendo a descargar lo que ya exista.")
+                else:
+                    results.append(("FULL_SEND_JOBS_DONE", f"Todos los jobs ({len(jobids)}) han terminado."))
+                    st.success(f"Todos los jobs enviados por full_send.sh han terminado. Procediendo a descarga.")
+            else:
+                # Si no hay jobids, intentamos una espera razonable para dar tiempo a que se generen salidas
+                fallback_wait = int(st.session_state.get("fullsend_fallback_wait_secs", 60))
+                st.info(f"No se han leído jobids de jobs.txt; esperando otros {fallback_wait}s antes de descargar.")
+                time.sleep(fallback_wait)
 
-                        #####################   TEST    #####################
-                        # after successful execution (non-slurm)
-                        stdin, stdout, stderr = ssh.exec_command(full_cmd)
-                        # nueva comprobación robusta:
-                        exit_code = stdout.channel.recv_exit_status()  # espera a que termine
-                        out_exec = stdout.read().decode().strip()
-                        err_exec = stderr.read().decode().strip()
-
-                        if exit_code == 0:
-                            # comprobaremos gt + gtp primero
-                            if not _wait_for_remote_files(sftp, subdir, ["gt.dat", "gtp.dat"], retries=6, delay=1.0):
-                                results.append((mw, dist_code, pdi_val, "WARNING: outputs (gt/gtp) not found after execution; skipping .gnu creation"))
-                            else:
-                                # si BoB produce gpcls cuando CalcGPCLS=yes, espera gpcls*.dat
-                                if st.session_state.get("configure_rc_toggle", False) or True:  # si tu bob.rc tiene CalcGPCLS=yes
-                                    if _wait_for_remote_files(sftp, subdir, ["gpcls*"], retries=6, delay=1.0):
-                                        # ya está gpcls1.dat (o gpclssys.dat) -> gg
-                                        try:
-                                            gnu_gpclssys_generation(name_server, name_user, ssh_key_options, subdir)
-                                        except Exception as e:
-                                            results.append((mw, dist_code, pdi_val, f"Advertencia creando gpclssys.gnu: {e}"))
-                                    else:
-                                        # no hay gpcls*.dat -> no intentamos gpclssys.gnu
-                                        results.append((mw, dist_code, pdi_val, "No gpcls*.dat found -> skipping gpclssys.gnu"))
-                                # siempre intentamos modulus.gnu si gt/gtp existen
-                                try:
-                                    gnu_modulus_generation(name_server, name_user, ssh_key_options, subdir)
-                                except Exception as e:
-                                    results.append((mw, dist_code, pdi_val, f"Advertencia creando modulus.gnu: {e}"))
-
-                        else:
-                            results.append((mw, dist_code, pdi_val, f"Exec ERROR (code {exit_code}): {err_exec or out_exec}"))
+    except Exception as e:
+        results.append(("FULL_SEND_WAIT_EXCEPTION", str(e)))
+        st.warning(f"Error durante espera/consulta de jobs: {e}")
+    # ****************************NUEVO CAMBIO*************
 
 
-                        #####################   TEST    #####################
-
-                except Exception as e:
-                    results.append((mw, dist_code, pdi_val, f"ERROR general en ejecución: {e}"))
 
     # Cierre de conexiones iniciales
     try: sftp.close()
@@ -321,100 +424,131 @@ date
     try: ssh.close()
     except Exception: pass
 
-    # Generación DB y CSV (no-Slurm): recoger todos los subdirs que empiezan por Mw_
+
+    ##########################################################
+
+    #   DESCARGAR WORKING SIRECORY A LOCAL
+    # ****************************NUEVO CAMBIO*************
     try:
-        use_slurm = bool(st.session_state.get("slurm_partition", "").strip())
-        if not use_slurm:
-            # Generación de DB + CSV por-Mw en remoto (paralelo)
-            database_db_creation(
-                name_server, name_user, ssh_key_options, working_directory,
-                include_root=False,      # ignorar raíz en paralelo
-                per_mw=True,             # generar CSV por-Mw
-                upload_per_mw=True,      # subir por-Mw a cada subdir Mw_*
-                sort_ids_by_mw=True,     # reindex IDs por Mw ascendente
-                is_parallel=True         # bandera de modo paralelo
-            )
+        local_dir = st.session_state.get("input_options", {}).get("input_file_002", "")
+        if local_dir and os.path.isdir(local_dir):
+            ssh_dl = connect_remote_server(name_server, name_user, ssh_key_options)
+            sftp_dl = ssh_dl.open_sftp()
+            try:
+                entries = sftp_dl.listdir_attr(working_directory)
+            except Exception:
+                entries = []
 
-            results.append(("DB", f"OK -> {working_directory}/viscai_database.db"))
-
-            # --- NUEVO: descargar subdirectorios Mw_* al directorio local ---
-            local_dir = st.session_state.get("input_options", {}).get("input_file_002", "")
-            if local_dir and os.path.isdir(local_dir):
-                # Conectar y listar subdirs remotos
-                ssh = connect_remote_server(name_server, name_user, ssh_key_options)
-                sftp = ssh.open_sftp()
-                try:
-                    remote_subdirs = sftp.listdir(working_directory)
-                except Exception:
-                    remote_subdirs = []
-                mw_subdirs = [d for d in remote_subdirs if d.startswith("Mw_")]
-                for sd in mw_subdirs:
-                    remote_sd = f"{working_directory}/{sd}"
-                    local_target = os.path.join(local_dir, sd)
-                    try:
-                        _download_tree(sftp, remote_sd, local_target)  # usa la utilidad definida más abajo
-                        results.append((sd, f"Downloaded DIR -> {local_target}"))
-                    except Exception as e:
-                        results.append((sd, f"Download DIR ERROR -> {e}"))
-                try:
-                    sftp.close()
-                except Exception:
-                    pass
-                try:
-                    ssh.close()
-                except Exception:
-                    pass
+            if not entries:
+                results.append(("COLLECT_ALL", "No entries found in remote working_directory"))
             else:
-                results.append(("DIR-LOCAL", "Directorio local no definido -> outputs permanecen en remoto"))
-
-
-            ############## PREPROCESSING AND ML ##############
-            database_inspection()
-            st.info("DONE preproecessed part 1!!!")
-            preprocess_database()
-            st.info("DONE preproecessed part 2!!!")
-            build_resampled_rheology_features()
-            st.info("DONE preproecessed part 3!!!")
-
-            prepare_rheology_dataset()
-            st.info("DONE training data part 1!!!")
-            validate_splits()
-            st.info("DONE training data part 2!!!")
-
-            train_baseline_models()
-            st.info("DONE models part 1!!!")
-            model_diagnostics()
-            st.info("DONE models part 2!!!")
-            bootstrap_metric()
-            st.info("DONE models part 3!!!")
-            compute_permutation_importance()
-            st.info("DONE models part 4!!!")
-            save_worst_cases()
-            st.info("DONE worst cases part 1!!!")
-            save_shap_summary()
-            st.info("DONE models part 5!!!")
-
-            plot_worst_cases()
-            st.info("DONE worst cases part 2!!!")
-            check_worst_cases_ranges()
-            st.info("DONE worst cases part 3!!!")
-            check_worst_cases_local_density()
-            st.info("DONE worst cases part 4!!!")
-            rf_uncertainty_for_worst_cases()
-            st.info("DONE worst cases part 5!!!")
-
+                try:
+                    for entry in entries:
+                        rname = entry.filename
+                        rpath = working_directory.rstrip("/") + "/" + rname
+                        lpath = os.path.join(local_dir, rname)
+                        if stat.S_ISDIR(entry.st_mode):
+                            _download_tree(sftp_dl, rpath, lpath)
+                        else:
+                            os.makedirs(os.path.dirname(lpath) or local_dir, exist_ok=True)
+                            sftp_dl.get(rpath, lpath)
+                    results.append(("COLLECT_ALL", f"Downloaded all content of {working_directory} to {local_dir}"))
+                    st.success(f"Todos los ficheros de '{working_directory}' descargados a '{local_dir}'")
+                except Exception as e:
+                    results.append(("COLLECT_ALL_ERROR", str(e)))
+                    st.warning(f"Error descargando todo el working_directory: {e}")
+            try:
+                sftp_dl.close()
+            except Exception:
+                pass
+            try:
+                ssh_dl.close()
+            except Exception:
+                pass
         else:
-            # Con Slurm: intentar descarga masiva (puede fallar si los jobs no han terminado)
-            local_dir = st.session_state.get("input_options", {}).get("input_file_002", "")
-            if local_dir and os.path.isdir(local_dir):
-                summary = collect_mw_dirs(name_server, name_user, ssh_key_options, working_directory, local_dir)
-                results.append(("COLLECT", summary))
-            else:
-                results.append(("COLLECT", "Directorio local no definido"))
+            results.append(("COLLECT_ALL", "Local directory not defined - skip full collect"))
     except Exception as e:
-        results.append(("DB", f"ERROR generando/descargando DB y subdirectorios: {e}"))
+        results.append(("COLLECT_ALL_EXCEPTION", str(e)))
+        st.warning(f"Error general descargando working_directory: {e}")
+
+
+    # # **************************** CAMBIO ****************************
+    # local_dir = Path(
+    #     st.session_state["input_options"]["input_file_002"]
+    # )
+    # # **************************** CAMBIO ****************************
+    #
+    # if not local_dir.exists():
+    #     raise RuntimeError("El directorio local no existe")
+    #
+    # print(f"[INFO] Usando datos locales en: {local_dir}")
+    #
+    # # **************************** CAMBIO ****************************
+    # db_path = database_db_creation(
+    #     name_server=None,  # <- FUERZA MODO LOCAL
+    #     name_user=None,
+    #     ssh_key_options=None,
+    #     working_directory=local_dir,
+    #     include_root=False,
+    #     per_mw=True,
+    #     upload_per_mw=False,
+    #     sort_ids_by_mw=True,
+    #     is_parallel=True
+    # )
+    # # **************************** CAMBIO ****************************
+    #
+    # print(f"[OK] Base de datos lista: {db_path}")
+    #
+    # return db_path
+
+        # ****************************NUEVO CAMBIO************************
+
+    # ****************************NUEVO CAMBIO************************
+
+    #
+    # ############## PREPROCESSING AND ML ##############
+    # database_inspection()
+    # st.info("DONE preproecessed part 1!!!")
+    # preprocess_database()
+    # st.info("DONE preproecessed part 2!!!")
+    # build_resampled_rheology_features()
+    # st.info("DONE preproecessed part 3!!!")
+    #
+    # prepare_rheology_dataset()
+    # st.info("DONE training data part 1!!!")
+    # validate_splits()
+    # st.info("DONE training data part 2!!!")
+    #
+    # train_baseline_models()
+    # st.info("DONE models part 1!!!")
+    # model_diagnostics()
+    # st.info("DONE models part 2!!!")
+    # bootstrap_metric()
+    # st.info("DONE models part 3!!!")
+    # compute_permutation_importance()
+    # st.info("DONE models part 4!!!")
+    # save_worst_cases()
+    # st.info("DONE worst cases part 1!!!")
+    # save_shap_summary()
+    # st.info("DONE models part 5!!!")
+    #
+    # plot_worst_cases()
+    # st.info("DONE worst cases part 2!!!")
+    # check_worst_cases_ranges()
+    # st.info("DONE worst cases part 3!!!")
+    # check_worst_cases_local_density()
+    # st.info("DONE worst cases part 4!!!")
+    # rf_uncertainty_for_worst_cases()
+    # st.info("DONE worst cases part 5!!!")
+
+    ##########################################################
+    # **************** NUEVO CAMBIO **********
+    expected_combinations = len(mw_list) * len(dist_opts) * len(pdi_opts)
+    results.append(("EXPECTED_COMBINATIONS", expected_combinations))
+    # **************** NUEVO CAMBIO **********
 
     return results
+
 
 def reset_bob_options():
     st.session_state.input_options = {}

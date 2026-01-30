@@ -10,7 +10,7 @@ import streamlit as st
 
 from ViscAI.server_options import (
     check_username_and_name_server,
-    verify_virtualenv_path,
+    verify_bob_remote_fullpath,
     verify_working_directory,
     ensure_json_extension,
 )
@@ -23,7 +23,7 @@ class ServerScreen:
         self._name_server = None
         self._name_user = None
         self._ssh_key_options = None
-        self._path_virtualenv = None
+        self._bob_remote_fullpath = None
         self._working_directory = None
         self._json_filename = None
         self._input_placeholder = None
@@ -64,14 +64,14 @@ class ServerScreen:
                     self._name_server = server_options.get("Name Server*", "")
                     self._name_user = server_options.get("Username*", "")
                     self._ssh_key_options = server_options.get("Key SSH file path*", "")
-                    self._path_virtualenv = server_options.get("Virtual environment path*", "")
+                    self._bob_remote_fullpath = server_options.get("BoB remote fullpath*", "")
                     self._working_directory = server_options.get("Working directory*", "")
 
                     st.session_state.server_options = {
                         "Name Server*": self._name_server,
                         "Username*": self._name_user,
                         "Key SSH file path*": self._ssh_key_options,
-                        "Virtual environment path*": self._path_virtualenv,
+                        "BoB remote fullpath*": self._bob_remote_fullpath,
                         "Working directory*": self._working_directory
                     }
                     st.session_state["ssh_key_options"] = self._ssh_key_options
@@ -86,7 +86,7 @@ class ServerScreen:
             "Name Server*": "",
             "Username*": "",
             "Key SSH file path*": "",
-            "Virtual environment path*": "",
+            "BoB remote fullpath*": "",
             "Working directory*": ""
         })
 
@@ -106,7 +106,7 @@ class ServerScreen:
                 st.session_state["ssh_key_temp"] = ssh_filename
                 st.rerun()
 
-        self._path_virtualenv = st.text_input("**Virtual environment path***", server_options.get("Virtual environment path*", ""))
+        self._bob_remote_fullpath = st.text_input("**BoB remote fullpath***", server_options.get("BoB remote fullpath*", ""))
         self._working_directory = st.text_input("**Working directory***", server_options.get("Working directory*", ""))
 
         # Persistir
@@ -114,13 +114,13 @@ class ServerScreen:
             "Name Server*": self._name_server,
             "Username*": self._name_user,
             "Key SSH file path*": self._ssh_key_options,
-            "Virtual environment path*": self._path_virtualenv,
+            "BoB remote fullpath*": self._bob_remote_fullpath,
             "Working directory*": self._working_directory
         }
 
         # Validaciones básicas de conexión
         valid = True
-        if not self._name_server or not self._name_user or not self._ssh_key_options or not self._path_virtualenv or not self._working_directory:
+        if not self._name_server or not self._name_user or not self._ssh_key_options or not self._bob_remote_fullpath or not self._working_directory:
             st.error("ERROR!!! Please enter all required fields")
             valid = False
             return
@@ -135,10 +135,12 @@ class ServerScreen:
             valid = False
             return
 
-        if not verify_virtualenv_path(self._name_server, self._name_user, self._ssh_key_options, self._path_virtualenv):
-            st.error(f"ERROR!!! Virtual environment path '{self._path_virtualenv}' does not exist on remote server")
+        if not verify_bob_remote_fullpath(self._name_server, self._name_user, self._ssh_key_options, self._bob_remote_fullpath):
+            st.error(f"ERROR!!! BoB remote fullpath '{self._bob_remote_fullpath}' does not exist on remote server")
             valid = False
             return
+
+        st.session_state["bob_remote_fullpath"] = self._bob_remote_fullpath
 
         if not verify_working_directory(self._name_server, self._name_user, self._ssh_key_options, self._working_directory):
             st.error(f"ERROR!!! Working directory '{self._working_directory}' does not exist")
@@ -156,7 +158,7 @@ class ServerScreen:
                     "Name Server*": self._name_server,
                     "Username*": self._name_user,
                     "Key SSH file path*": self._ssh_key_options,
-                    "Virtual environment path*": self._path_virtualenv,
+                    "BoB remote fullpath*": self._bob_remote_fullpath,
                     "Working directory*": self._working_directory
                 }, indent=2).encode("utf-8")
                 st.download_button(label="Save", data=json_payload, file_name=self._json_filename, mime="application/json")
@@ -198,10 +200,10 @@ class ServerScreen:
                 help="Ejemplos: 1024M, 2G"
             )
 
-            st.session_state["slurm_job_name"] = st.text_input(
-                "Prefijo del nombre del job",
-                value=st.session_state.get("slurm_job_name", "BoBjob")
-            )
+            # st.session_state["slurm_job_name"] = st.text_input(
+            #     "Prefijo del nombre del job",
+            #     value=st.session_state.get("slurm_job_name", "BoBjob")
+            # )
 
         else:
             # Si SLURM se desactiva, limpiamos la partición (clave)

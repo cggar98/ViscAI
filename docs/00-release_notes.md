@@ -1,6 +1,6 @@
 Release Notes
 ======================
 
-**Version 1.0:**
+**Version 0.1:**
 
 * Initial public release of ViscAI

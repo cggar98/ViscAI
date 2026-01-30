@@ -42,7 +42,7 @@ We recommend *Miniconda* or *Anaconda* to manage virtual environments
 
 ---
 
-## 3) Create & activate a conda environment on local and remote server with **Python >=3.10**.
+## 3) Create & activate a conda environment on local with **Python >=3.10**.
     ```bash
     conda create -n <virtualenv_name> python=3.10
     conda activate <virtualenv_name>
@@ -52,30 +52,18 @@ We recommend *Miniconda* or *Anaconda* to manage virtual environments
 
 ## 4) Install in your local machine ViscAI dependencies
 1. Python dependencies.
-Install all required Python packages from the conda-forge channel:
+Install all required Python packages:
     ```bash
-    conda install -c conda-forge \
+    pip install \
         streamlit \
         paramiko \
         numpy \
         pandas \
         matplotlib \
-        pillow \
-    ```
-2. System dependencies.
-Some features require system-level packages that are not Python libraries.
-    ```bash
-    conda install -c conda-forge \
-        tk \
-        grace \
+        pillow
     ```
 
-**NOTE**: These dependencies can be installed in a single step using **conda** and the provided **requirements.txt** file.
-    ```bash
-    conda create -n <virtualenv_name> -c conda-forge --file requirements.txt
-    ```
-
-3. Verify installation.
+2. Verify installation.
     ```bash
     streamlit --version
     python -c "import streamlit, paramiko, numpy, pandas, matplotlib; print('All ViscAI dependencies installed')
@@ -95,14 +83,26 @@ Used to see the database and export tables to CSV.
 
 ---
 
-## 6) Install **BoB 2.5 (Branch-on-Branch)** on remote servers
-Download and install following the official instructions:
+## 6) Install **BoB 2.5 (Branch-on-Branch)** on remote servers where it will be run
+Download and install it following the official instructions:
 
-- Dowload page: https://sourceforge.net/projects/bob-rheology/files/bob-rheology/bob2.5/
+1. Download page: https://sourceforge.net/projects/bob-rheology/files/bob-rheology/bob2.5/
 
-**NOTES**
-- Check if the BoB executable is in the user PATH.
-- Check libraries/compilers required by BoB for your system.
+2. To ensure that BoB can be executed, the BoB executable must be added to the user PATH:
+
+    - Locate the BoB executable file (bob2p5) on your remote server.
+    - Move the executable to a directory in the user PATH. Example:
+    ```bash
+    mv /path/to/bob2p5 /usr/local/bin/
+    ```
+    - Verify that /usr/local/bin/ is in the PATH
+    ```bash
+    echo $PATH
+    ```
+    - Enter in a terminal server and run:
+    ```bash
+    bob2p5
+    ```
 
 ---
 

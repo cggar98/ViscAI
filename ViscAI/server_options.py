@@ -10,8 +10,9 @@ def ensure_json_extension(json_filename):
     return json_filename
 
 
-def save_options_to_json(name_server, name_user, ssh_key_options, path_virtualenv,
-                         working_directory, json_filename, conda_sh_path):
+def save_options_to_json(name_server, name_user,
+                         ssh_key_options, bob_remote_fullpath,
+                         working_directory, json_filename):
     if not json_filename:
         return None
 
@@ -19,9 +20,8 @@ def save_options_to_json(name_server, name_user, ssh_key_options, path_virtualen
         "Name Server*": "{}".format(name_server),
         "Username*": "{}".format(name_user),
         "Key SSH file path*": "{}".format(ssh_key_options),
-        "Virtual environment path*": "{}".format(path_virtualenv),
-        "Working directory*": "{}".format(working_directory),
-        "Conda.sh path*": "{}".format(conda_sh_path)
+        "BoB remote fullpath*": "{}".format(bob_remote_fullpath),
+        "Working directory*": "{}".format(working_directory)
     }
 
     json_string = json.dumps(options, indent=4)
@@ -33,12 +33,12 @@ def validate_server_connection():
     name_server = server_options.get("Name Server*", "")
     name_user = server_options.get("Username*", "")
     ssh_key_options = server_options.get("Key SSH file path*", "")
-    path_virtualenv = server_options.get("Virtual environment path*", "")
+    bob_remote_fullpath = server_options.get("BoB remote fullpath*", "")
     working_directory = server_options.get("Working directory*", "")
 
     server_connected = (
         check_username_and_name_server(name_server, name_user, ssh_key_options) and
-        verify_virtualenv_path(name_server, name_user, ssh_key_options, path_virtualenv) and
+        verify_bob_remote_fullpath(name_server, name_user, ssh_key_options, bob_remote_fullpath) and
         verify_working_directory(name_server, name_user, ssh_key_options, working_directory)
     )
 
@@ -50,7 +50,7 @@ def validate_server_connection():
         "name_server": name_server,
         "name_user": name_user,
         "ssh_key_options": ssh_key_options,
-        "path_virtualenv": path_virtualenv,
+        "bob_remote_fullpath": bob_remote_fullpath,
         "working_directory": working_directory
     }
 
@@ -70,16 +70,20 @@ def check_username_and_name_server(name_server, name_user, ssh_key_options):
         return False
 
 
-def verify_virtualenv_path(name_server, name_user, ssh_key_options, path_virtualenv):
-    """Verifies if the virtual environment path exists on the remote server."""
+def verify_bob_remote_fullpath(name_server, name_user, ssh_key_options, bob_remote_fullpath):
+    """Verifies if the bob executable exists and is executable on the remote server."""
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(name_server, username=name_user, key_filename=ssh_key_options)
 
-    stdin, stdout, stderr = ssh.exec_command(f"test -d '{path_virtualenv}' && echo 'exists' || echo 'not exists'")
-    env_check = stdout.read().decode().strip()
-    return env_check == 'exists'
+    cmd = f"[ -f '{bob_remote_fullpath}' ] && [ -x '{bob_remote_fullpath}' ] && echo exists || echo not_exists"
+    stdin, stdout, stderr = ssh.exec_command(cmd)
+
+    result = stdout.read().decode().strip()
+    ssh.close()
+
+    return result == "exists"
 
 
 def verify_working_directory(name_server, name_user, ssh_key_options, working_directory):

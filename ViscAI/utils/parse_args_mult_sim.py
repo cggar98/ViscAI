@@ -21,3 +21,16 @@ def _parse_mw_list(text: str) -> list[float]:
         except ValueError:
             continue
     return out
+
+
+def _parse_pdi_list(s):
+    vals = []
+    for t in (s or "").replace("\n", ",").replace(";", ",").split(","):
+        t = t.strip().replace(" ", "")
+        if not t:
+            continue
+        try:
+            vals.append(float(t))
+        except Exception:
+            pass
+    return vals
